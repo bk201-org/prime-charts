@@ -21,7 +21,7 @@ forkliftOperatorAnsible:
       virtV2VDontRequestKvm: ""
       vsphereOsMap: ""
       vsphereXcopyVolumePopulatorImage: ""
-    imagePullPolicy: Always
+    imagePullPolicy: IfNotPresent
     resources:
       requests:
         cpu: 10m
