@@ -1,0 +1,7 @@
+chart-dirs:
+  - charts
+chart-yaml-schema: tests/chart_schema.yaml
+helm-extra-args: --timeout 5m
+kubectl-timeout: 5m
+lint-conf: tests/lintconf.yaml
+validate-maintainers: false

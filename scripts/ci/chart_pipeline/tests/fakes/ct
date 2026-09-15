@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import os
+import sys
+
+
+message = os.environ.get("FAKE_CT_STDERR_MESSAGE")
+if message:
+    print(message, file=sys.stderr)
+
+noise = os.environ.get("FAKE_CT_STDOUT_NOISE")
+if noise:
+    print(noise, flush=True)
+
+real_ct = os.environ["REAL_CT"]
+os.execv(real_ct, [real_ct, *sys.argv[1:]])

@@ -1,0 +1,39 @@
+name: Publish charts
+description: Package, verify, and publish charts to an OCI registry.
+
+inputs:
+  charts:
+    description: Newline-separated chart paths to publish.
+    required: true
+  registry:
+    description: The OCI registry host to publish to.
+    required: true
+  github-repository:
+    description: The repository slug used as the registry namespace (github.repository).
+    required: true
+  verify-attempts:
+    description: Number of times to retry verifying a published chart.
+    required: false
+    default: '5'
+  verify-delay-seconds:
+    description: Base delay, in seconds, between verification attempts.
+    required: false
+    default: '1'
+
+outputs:
+  published-charts:
+    description: JSON array of {name, version, chart_ref, digest} for every chart pushed this run.
+    value: ${{ steps.publish.outputs.published-charts }}
+
+runs:
+  using: composite
+  steps:
+    - id: publish
+      shell: bash
+      env:
+        CHARTS: ${{ inputs.charts }}
+        REGISTRY: ${{ inputs.registry }}
+        REPOSITORY: ${{ inputs.github-repository }}
+        VERIFY_ATTEMPTS: ${{ inputs.verify-attempts }}
+        VERIFY_DELAY_SECONDS: ${{ inputs.verify-delay-seconds }}
+      run: python3 -m scripts.ci.chart_pipeline.publish_charts

@@ -1,0 +1,292 @@
+name: Publish Prime Charts
+
+on:
+  pull_request:
+    branches:
+      - main
+      - 'v[0-9]+.[0-9]+'
+    paths:
+      - charts/**
+      - scripts/ci/**
+      - tests/**
+      - .github/workflows/ci.yaml
+  push:
+    branches:
+      - main
+      - 'v[0-9]+.[0-9]+'
+    paths:
+      - charts/**
+      - scripts/ci/**
+      - tests/**
+      - .github/workflows/ci.yaml
+  workflow_dispatch:
+    inputs:
+      overwrite_existing:
+        description: Existing chart to overwrite as chart-name@version
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HELM_VERSION: v3.21.3
+  PYTHON_VERSION: '3.13'
+  VERBOSE: 'true'
+
+jobs:
+  ci-script-test:
+    name: Test CI scripts
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+        with:
+          version: v3.14.0
+
+      - name: Run tests
+        run: >-
+          python3 -m unittest discover
+          --start-directory scripts/ci/chart_pipeline/tests
+          --top-level-directory .
+          --verbose
+
+  chart-test:
+    name: Lint and install charts
+    needs: ci-script-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      charts: ${{ steps.changes.outputs.charts }}
+      has-charts: ${{ steps.changes.outputs.has-charts }}
+      publish-charts: ${{ steps.changes.outputs.publish-charts }}
+      publish-charts-json: ${{ steps.publish-charts-json.outputs.charts }}
+      has-publish-charts: ${{ steps.changes.outputs.has-publish-charts }}
+      stable-branch: ${{ steps.changes.outputs.stable-branch }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+        with:
+          version: v3.14.0
+
+      - name: Find charts to test
+        id: changes
+        uses: ./.github/actions/find-charts
+        with:
+          event-name: ${{ github.event_name }}
+          before-sha: ${{ github.event.before }}
+          pr-base-sha: ${{ github.event.pull_request.base.sha }}
+          base-ref: ${{ github.base_ref }}
+          ref-name: ${{ github.ref_name }}
+          overwrite-existing: ${{ inputs.overwrite_existing }}
+
+      - name: Compute JSON list of charts to publish
+        id: publish-charts-json
+        if: steps.changes.outputs.has-publish-charts == 'true'
+        shell: bash
+        env:
+          PUBLISH_CHARTS: ${{ steps.changes.outputs.publish-charts }}
+        run: |
+          json=$(printf '%s\n' "$PUBLISH_CHARTS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "charts=$json" >> "$GITHUB_OUTPUT"
+
+      - name: Reject unresolved test images
+        if: steps.changes.outputs.has-charts == 'true'
+        shell: bash
+        env:
+          CHARTS: ${{ steps.changes.outputs.charts }}
+        run: bash scripts/ci/check-test-images.sh
+
+      - name: Lint charts
+        if: steps.changes.outputs.has-charts == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.changes.outputs.base-sha }}
+          CHARTS: ${{ steps.changes.outputs.charts }}
+          STABLE_BRANCH: ${{ steps.changes.outputs.stable-branch }}
+          TEST_ALL: ${{ steps.changes.outputs.test-all }}
+        run: bash scripts/ci/lint-charts.sh
+
+      - name: Package charts
+        if: steps.changes.outputs.has-charts == 'true'
+        shell: bash
+        env:
+          CHARTS: ${{ steps.changes.outputs.charts }}
+        run: |
+          set -euo pipefail
+          package_dir=$(mktemp -d)
+
+          while IFS= read -r chart; do
+            [[ -n "${chart}" ]] || continue
+            helm package "${chart}" --destination "${package_dir}"
+          done <<< "${CHARTS}"
+
+      - name: Create kind cluster
+        if: steps.changes.outputs.has-charts == 'true'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.31.0
+          node_image: kindest/node:v1.35.0
+          cluster_name: chart-testing
+          wait: 120s
+
+      - name: Substitute test image values
+        if: steps.changes.outputs.has-charts == 'true'
+        shell: bash
+        env:
+          FORKLIFT_REGISTRY: ${{ secrets.FORKLIFT_REGISTRY }}
+          MCP_SERVER_REGISTRY: ${{ secrets.MCP_SERVER_REGISTRY }}
+        run: |
+          set -euo pipefail
+          # Substitute environment variables in kind-values.yaml files
+          find charts -name "kind-values.yaml" -type f | while read -r file; do
+            envsubst < "${file}" > "${file}.tmp"
+            mv "${file}.tmp" "${file}"
+          done
+
+      - name: Install charts
+        if: steps.changes.outputs.has-charts == 'true'
+        shell: bash
+        env:
+          CHARTS: ${{ steps.changes.outputs.charts }}
+        run: |
+          set -euo pipefail
+          chart_csv=$(printf '%s\n' "${CHARTS}" | paste -sd, -)
+          ct install \
+            --config tests/ct.yaml \
+            --charts "${chart_csv}" \
+            --build-id "${GITHUB_RUN_ID}"
+
+  publish-prime:
+    name: Publish and sign chart for Prime registry
+    needs: chart-test
+    if: >-
+      needs.chart-test.result == 'success' &&
+      needs.chart-test.outputs.has-publish-charts == 'true' &&
+      needs.chart-test.outputs.stable-branch == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart: ${{ fromJson(needs.chart-test.outputs.publish-charts-json) }}
+    env:
+      PRIME_REGISTRY: ${{ secrets.PRIME_REGISTRY }}
+      PRIME_REGISTRY_USERNAME: ${{ secrets.PRIME_REGISTRY_USERNAME }}
+      PRIME_REGISTRY_PASSWORD: ${{ secrets.PRIME_REGISTRY_PASSWORD }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Log in to Prime registry
+        shell: bash
+        run: |
+          printf '%s' "${PRIME_REGISTRY_PASSWORD}" |
+            helm registry login "${PRIME_REGISTRY}" \
+              --username "${PRIME_REGISTRY_USERNAME}" \
+              --password-stdin
+
+      - name: Package, check, and publish chart
+        id: publish
+        uses: ./.github/actions/publish-charts
+        with:
+          charts: ${{ matrix.chart }}
+          registry: ${{ env.PRIME_REGISTRY }}
+          github-repository: ${{ env.PRIME_REGISTRY_USERNAME }}
+
+      - name: Extract published chart digest
+        id: chart
+        shell: bash
+        env:
+          PUBLISHED: ${{ steps.publish.outputs.published-charts }}
+        run: |
+          name=$(printf '%s' "${PUBLISHED:-[]}" | jq -r '.[0].name // empty')
+          digest=$(printf '%s' "${PUBLISHED:-[]}" | jq -r '.[0].digest // empty')
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        if: steps.chart.outputs.digest != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to Prime registry with Cosign
+        if: steps.chart.outputs.digest != ''
+        shell: bash
+        run: |
+          printf '%s' "${PRIME_REGISTRY_PASSWORD}" |
+            cosign login "${PRIME_REGISTRY}" \
+              --username "${PRIME_REGISTRY_USERNAME}" \
+              --password-stdin
+
+      - name: Sign chart
+        if: steps.chart.outputs.digest != ''
+        shell: bash
+        env:
+          DIGEST: ${{ steps.chart.outputs.digest }}
+          NAME: ${{ steps.chart.outputs.name }}
+        run: |
+          cosign sign \
+            --oidc-provider=github-actions \
+            --yes \
+            "${PRIME_REGISTRY}/${PRIME_REGISTRY_USERNAME}/${NAME}@${DIGEST}"
+
+      - name: Attest chart provenance
+        if: steps.chart.outputs.digest != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.PRIME_REGISTRY }}/${{ env.PRIME_REGISTRY_USERNAME }}/${{ steps.chart.outputs.name }}
+          subject-digest: ${{ steps.chart.outputs.digest }}
+          push-to-registry: true
