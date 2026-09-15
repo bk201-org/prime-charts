@@ -1,0 +1,12 @@
+# Operating system and editor files
+.DS_Store
+*.swp
+*~
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Packaged and signed Helm chart artifacts
+*.tgz
+*.prov

@@ -1,0 +1,10 @@
+insecureSkipTls: true
+
+mcp:
+  env:
+    - name: RANCHER_URL
+      value: "https://example.com"
+  image:
+    repository: ${MCP_SERVER_REGISTRY}/harvester-mcp-server
+    tag: main-head
+    pullPolicy: IfNotPresent

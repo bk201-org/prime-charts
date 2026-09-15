@@ -1,0 +1,14 @@
+# CI-only values are not part of the published chart.
+ci/
+
+# Common VCS and editor files.
+.git/
+.gitignore
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.idea/
+.vscode/

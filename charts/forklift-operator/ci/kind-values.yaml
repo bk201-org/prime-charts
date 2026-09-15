@@ -1,0 +1,6 @@
+forkliftOperatorAnsible:
+  forkliftOperator:
+    repo: ${FORKLIFT_REGISTRY}
+    operatorImage: harvester-forklift-operator
+    tag: v1.8.2
+    imagePullPolicy: IfNotPresent

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: example
+description: Chart used by the CI script tests
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

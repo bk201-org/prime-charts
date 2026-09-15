@@ -1,0 +1,65 @@
+name: Find charts
+description: >-
+  Select charts to test and publish based on the triggering event, and
+  expose the selection as step outputs.
+
+inputs:
+  event-name:
+    description: The triggering event name (github.event_name).
+    required: true
+  before-sha:
+    description: The commit before the push (github.event.before).
+    required: false
+    default: ''
+  pr-base-sha:
+    description: The pull request base commit (github.event.pull_request.base.sha).
+    required: false
+    default: ''
+  base-ref:
+    description: The pull request base branch (github.base_ref).
+    required: false
+    default: ''
+  ref-name:
+    description: The branch or tag name (github.ref_name).
+    required: true
+  overwrite-existing:
+    description: Existing chart to overwrite as chart-name@version.
+    required: false
+    default: ''
+
+outputs:
+  charts:
+    description: Newline-separated chart paths to test.
+    value: ${{ steps.changes.outputs.charts }}
+  has-charts:
+    description: "'true' when any chart is selected for testing."
+    value: ${{ steps.changes.outputs.has-charts }}
+  publish-charts:
+    description: Newline-separated chart paths to publish.
+    value: ${{ steps.changes.outputs.publish-charts }}
+  has-publish-charts:
+    description: "'true' when any chart is selected for publication."
+    value: ${{ steps.changes.outputs.has-publish-charts }}
+  stable-branch:
+    description: "'true' when running on a vX.Y branch."
+    value: ${{ steps.changes.outputs.stable-branch }}
+  base-sha:
+    description: The resolved commit used as the comparison base, if any.
+    value: ${{ steps.changes.outputs.base-sha }}
+  test-all:
+    description: "'true' when all charts were selected, rather than a changed subset."
+    value: ${{ steps.changes.outputs.test-all }}
+
+runs:
+  using: composite
+  steps:
+    - id: changes
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event-name }}
+        BEFORE_SHA: ${{ inputs.before-sha }}
+        PR_BASE_SHA: ${{ inputs.pr-base-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REF_NAME: ${{ inputs.ref-name }}
+        OVERWRITE_EXISTING: ${{ inputs.overwrite-existing }}
+      run: python3 -m scripts.ci.chart_pipeline.find_charts
