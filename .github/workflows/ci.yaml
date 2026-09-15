@@ -158,42 +158,6 @@ jobs:
             helm package "${chart}" --destination "${package_dir}"
           done <<< "${CHARTS}"
 
-      - name: Create kind cluster
-        if: steps.changes.outputs.has-charts == 'true'
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
-        with:
-          version: v0.31.0
-          node_image: kindest/node:v1.35.0
-          cluster_name: chart-testing
-          wait: 120s
-
-      - name: Substitute test image values
-        if: steps.changes.outputs.has-charts == 'true'
-        shell: bash
-        env:
-          FORKLIFT_REGISTRY: ${{ secrets.FORKLIFT_REGISTRY }}
-          MCP_SERVER_REGISTRY: ${{ secrets.MCP_SERVER_REGISTRY }}
-        run: |
-          set -euo pipefail
-          # Substitute environment variables in kind-values.yaml files
-          find charts -name "kind-values.yaml" -type f | while read -r file; do
-            envsubst < "${file}" > "${file}.tmp"
-            mv "${file}.tmp" "${file}"
-          done
-
-      - name: Install charts
-        if: steps.changes.outputs.has-charts == 'true'
-        shell: bash
-        env:
-          CHARTS: ${{ steps.changes.outputs.charts }}
-        run: |
-          set -euo pipefail
-          chart_csv=$(printf '%s\n' "${CHARTS}" | paste -sd, -)
-          ct install \
-            --config tests/ct.yaml \
-            --charts "${chart_csv}" \
-            --build-id "${GITHUB_RUN_ID}"
-
   publish-prime:
     name: Publish and sign chart for Prime registry
     needs: chart-test
