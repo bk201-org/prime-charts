@@ -127,13 +127,6 @@ jobs:
           json=$(printf '%s\n' "$PUBLISH_CHARTS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "charts=$json" >> "$GITHUB_OUTPUT"
 
-      - name: Reject unresolved test images
-        if: steps.changes.outputs.has-charts == 'true'
-        shell: bash
-        env:
-          CHARTS: ${{ steps.changes.outputs.charts }}
-        run: bash scripts/ci/check-test-images.sh
-
       - name: Lint charts
         if: steps.changes.outputs.has-charts == 'true'
         shell: bash

@@ -1,4 +1,4 @@
-# Prime Charts
+# Harvester Prime Charts
 
 Helm charts maintained for Harvester Prime are stored under `charts/` and are published as private OCI artifacts after they pass linting and installation in a kind cluster.
 
@@ -23,7 +23,7 @@ Pull requests and pushes to `main` and `vX.Y` branches run the following checks 
 
 Changes to shared CI configuration and manually dispatched runs test every chart. A manual overwrite tests only its requested chart. Stable-branch publication depends on the successful completion of these checks.
 
-Chart-specific kind overrides live in each chart's `ci/kind-values.yaml`. The workflow fails early if a selected test-values file contains an unresolved `REPLACE_ME_*` image placeholder.
+Chart-specific kind overrides live in each chart's `ci/kind-values.yaml`. Registry values in these files are placeholders (e.g. `${FORKLIFT_REGISTRY}`) substituted from repository secrets before the kind cluster installs the charts.
 
 The chart pipeline implementation and its tests live together under `scripts/ci/chart_pipeline/`. Run the tests locally with `python3 -m unittest discover --start-directory scripts/ci/chart_pipeline/tests --top-level-directory . --verbose`. They require Python 3.13, Helm, and chart-testing, use temporary Git repositories and a filesystem-backed fake OCI registry, and do not push packages or require registry credentials. Chart discovery is delegated to `ct list-changed`; the repository helper adds event-specific base revisions, shared-file handling, and manual overwrite selection. The CI scripts write progress logs to stderr so stdout remains safe for machine-readable values. Set `VERBOSE=true` to include comparison revisions, temporary paths, selected chart names, and verification attempts.
 
