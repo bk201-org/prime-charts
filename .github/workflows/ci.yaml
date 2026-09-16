@@ -206,7 +206,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -283,10 +282,55 @@ jobs:
             --yes \
             "${PRIME_REGISTRY}/${PRIME_REGISTRY_USERNAME}/${NAME}@${DIGEST}"
 
+      - name: Generate provenance predicate
+        if: steps.chart.outputs.digest != ''
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          cat > "${RUNNER_TEMP}/predicate.json" <<EOF
+          {
+            "buildDefinition": {
+              "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+              "externalParameters": {
+                "workflow": {
+                  "ref": "${REF}",
+                  "repository": "https://github.com/${REPOSITORY}",
+                  "path": ".github/workflows/ci.yaml"
+                }
+              },
+              "resolvedDependencies": [
+                {
+                  "uri": "git+https://github.com/${REPOSITORY}@${REF}",
+                  "digest": { "gitCommit": "${SHA}" }
+                }
+              ]
+            },
+            "runDetails": {
+              "builder": {
+                "id": "https://github.com/actions/runner"
+              },
+              "metadata": {
+                "invocationId": "https://github.com/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}"
+              }
+            }
+          }
+          EOF
+
       - name: Attest chart provenance
         if: steps.chart.outputs.digest != ''
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ env.PRIME_REGISTRY }}/${{ env.PRIME_REGISTRY_USERNAME }}/${{ steps.chart.outputs.name }}
-          subject-digest: ${{ steps.chart.outputs.digest }}
-          push-to-registry: true
+        shell: bash
+        env:
+          DIGEST: ${{ steps.chart.outputs.digest }}
+          NAME: ${{ steps.chart.outputs.name }}
+        run: |
+          cosign attest \
+            --predicate "${RUNNER_TEMP}/predicate.json" \
+            --type slsaprovenance1 \
+            --oidc-provider=github-actions \
+            --yes \
+            "${PRIME_REGISTRY}/${PRIME_REGISTRY_USERNAME}/${NAME}@${DIGEST}"
