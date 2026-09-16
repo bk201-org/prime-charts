@@ -12,6 +12,47 @@ Helm charts maintained for Harvester Prime are stored under `charts/` and are pu
 
 Create a new stable branch from the tested revision on `main`. Continue new development on `main`, and backport applicable fixes to each maintained stable branch.
 
+### Adding a new chart on `main`
+
+1. Scaffold the chart under `charts/`:
+   ```shell
+   helm create charts/my-app
+   ```
+2. Fill in `Chart.yaml` (name, description, starting `version: 0.1.0`, `appVersion`), `values.yaml`, and `templates/` for the real deployment.
+3. Add a chart-local `ci/kind-values.yaml` with a runnable test image so `ct install` can bring the chart up in the ephemeral kind cluster. If the image comes from a private registry, reference it as `${MY_REGISTRY}` and wire a matching repository secret into the "Substitute test image values" step in `.github/workflows/ci.yaml`.
+4. Open a PR against `main`. CI lints, packages, and installs the chart in kind; `main` never publishes, so nothing is pushed to the Prime registry yet.
+5. Merge once CI passes. The chart ships the next time a stable branch is cut from `main`.
+
+### Bumping a chart version on a stable branch
+
+1. Check out the target `vX.Y` branch, e.g. `v1.9`.
+2. Make the chart change, then bump `version` in that chart's `Chart.yaml` — patch for fixes, minor for backward-compatible features, major for breaking changes:
+   ```diff
+    apiVersion: v2
+    name: forklift-operator
+   -version: 1.9.2
+   +version: 1.9.3
+    appVersion: "1.8.2"
+   ```
+3. Push (or merge a PR) to `v1.9`. CI lints (rejecting a missing version bump on a stable branch), packages, and installs the chart; on success, `publish-prime` publishes `forklift-operator@1.9.3` and signs/attests it.
+4. Confirm the publish, e.g. `helm show chart oci://<prime-registry>/<prime-registry-username>/forklift-operator --version 1.9.3`.
+
+### Overwriting a published chart
+
+By default a chart's content can't be altered without bumping its `version`, so a published `chart-name@version` never gets overwritten through the normal flow.
+
+`overwrite_existing` is a `workflow_dispatch` input on **Publish Prime Charts** that bypasses this and intentionally republishes one already-published `chart-name@version`. It only works when the workflow is run from a `vX.Y` stable branch — `main` never publishes, so `find_charts.py` rejects the request (`Existing charts can only be overwritten from a vX.Y branch.`) if the selected branch/ref isn't a stable branch.
+
+To use it, run the workflow from the target stable branch and pass the exact chart name and version from that chart's `Chart.yaml`, for example:
+
+```shell
+gh workflow run "Publish Prime Charts" \
+  --ref v1.9 \
+  -f overwrite_existing=harvester-mcp-server@1.9.1-dev.1
+```
+
+(equivalently, run it from the Actions tab: select **Publish Prime Charts**, choose branch `v1.9`, and fill in `overwrite_existing`.)
+
 ## Continuous integration
 
 Pull requests and pushes to `main` and `vX.Y` branches run the following checks for changed charts:
@@ -37,16 +78,22 @@ oci://<prime-registry>/<prime-registry-username>/<chart>
 
 The registry host and namespace come from the `PRIME_REGISTRY` and `PRIME_REGISTRY_USERNAME` repository secrets rather than from `github.repository`, so they can be replaced later without changing chart layout or versions.
 
-Every chart actually pushed (i.e. not skipped because it's already published with identical content) is signed keylessly with [cosign](https://github.com/sigstore/cosign) using the workflow's GitHub OIDC identity, and a SLSA provenance attestation is generated and pushed to the registry alongside it via `actions/attest-build-provenance`. Verify a published chart with:
+Every chart selected for publication is pushed unconditionally (there is no skip-if-unchanged check; `helm push` overwrites an existing tag), then signed keylessly with [cosign](https://github.com/sigstore/cosign) using the workflow's GitHub OIDC identity, and a SLSA provenance attestation is built and pushed to the registry alongside it with `cosign attest --type slsaprovenance1`. Verify a published chart with:
 
 ```shell
-cosign verify \
-  --certificate-identity-regexp 'https://github.com/harvester/prime-charts/.github/workflows/ci.yaml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  <prime-registry>/<prime-registry-username>/<chart>@<digest>
+identity_regexp='https://github.com/harvester/prime-charts/.github/workflows/ci.yaml@.*'
+chart_ref=<prime-registry>/<prime-registry-username>/<chart>@<digest>
 
-gh attestation verify oci://<prime-registry>/<prime-registry-username>/<chart>@<digest> \
-  -R harvester/prime-charts
+cosign verify \
+  --certificate-identity-regexp "${identity_regexp}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "${chart_ref}"
+
+cosign verify-attestation \
+  --type slsaprovenance1 \
+  --certificate-identity-regexp "${identity_regexp}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "${chart_ref}"
 ```
 
 Because the registry is private, local users need Prime registry credentials to pull charts:
@@ -60,6 +107,4 @@ helm install forklift oci://<prime-registry>/<prime-registry-username>/forklift-
   --create-namespace
 ```
 
-The CI job only reads repository contents. The publish-and-sign job additionally holds `id-token: write` (cosign and attestation OIDC signing) and `attestations: write` (GitHub-hosted attestation records).
-
-Published name/version pairs are immutable during normal push-based publication. To intentionally replace an existing artifact, manually run **Publish Prime Charts** from the target `vX.Y` branch and enter the exact `chart-name@version` in the `overwrite_existing` field, for example `harvester-mcp-server@1.9.1-dev.1`. The workflow tests only that chart, confirms the requested identity against `Chart.yaml`, overwrites the OCI tag without deleting it, pulls the result back to verify its contents, and signs/attests the overwritten artifact like any other push. This escape hatch accepts release and prerelease versions and should be used only when changing an existing artifact is intentional.
+The CI job only reads repository contents. The publish-and-sign job additionally holds `id-token: write` for cosign's and the provenance attestation's OIDC signing.
